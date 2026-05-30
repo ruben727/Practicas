@@ -28,7 +28,7 @@ class MyHomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Clima Actual'),
+        title: const Text('Mi primer Aplicación'),
         centerTitle: true,
       ),
       body: Center(
@@ -36,7 +36,7 @@ class MyHomePage extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Text(
-              '28°C',
+              '20C',
               style: TextStyle(
                 fontSize: 72,
                 fontWeight: FontWeight.bold,
