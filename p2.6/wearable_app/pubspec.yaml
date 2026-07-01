@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  ble_peripheral: ^1.0.0
+  bluetooth_low_energy: ^6.2.1
   web_socket_channel: ^3.0.0
   permission_handler: ^11.0.0
 

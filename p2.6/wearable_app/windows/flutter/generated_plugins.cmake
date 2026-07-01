@@ -3,7 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  ble_peripheral
+  bluetooth_low_energy_windows
   permission_handler_windows
 )
 

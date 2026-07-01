@@ -210,15 +210,29 @@ class _WearableScreenState extends State<WearableScreen> {
                       style: const TextStyle(
                           fontSize: 11, color: Colors.white54)),
 
-                  // WebSocket: show IP so phone can connect
-                  if (_server.mode == ServerMode.websocket &&
-                      _localIp.isNotEmpty)
+                  // WebSocket: this IP is the emulator's internal NAT address
+                  // (10.0.2.x) — it is NOT reachable from a physical phone.
+                  // Show the port + adb forward hint instead; see
+                  // WIFI_FALLBACK.md at the repo root for the full steps.
+                  if (_server.mode == ServerMode.websocket)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        'IP: $_localIp:${BleConstants.wsPort}',
-                        style: const TextStyle(
-                            fontSize: 11, color: Colors.cyanAccent),
+                      child: Column(
+                        children: [
+                          Text(
+                            'Puerto local: ${BleConstants.wsPort} (usa "adb forward" en tu PC)',
+                            style: const TextStyle(
+                                fontSize: 11, color: Colors.cyanAccent),
+                            textAlign: TextAlign.center,
+                          ),
+                          if (_localIp.isNotEmpty)
+                            Text(
+                              'IP interna AVD: $_localIp (no la uses en el teléfono)',
+                              style: const TextStyle(
+                                  fontSize: 9, color: Colors.white24),
+                              textAlign: TextAlign.center,
+                            ),
+                        ],
                       ),
                     ),
 

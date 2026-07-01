@@ -108,8 +108,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
                   child: TextField(
                     controller: _wsCtrl,
                     decoration: const InputDecoration(
-                      labelText: 'IP o hostname del wearable',
-                      hintText: 'localhost  ← usa adb forward/reverse',
+                      labelText: 'IP de tu PC (o "localhost" si usas USB)',
+                      hintText: 'ej. 192.168.1.50',
                       border: OutlineInputBorder(),
                     ),
                     keyboardType: TextInputType.url,
@@ -124,8 +124,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Para emulador: adb -s emulator-XXXX forward tcp:8080 tcp:8080\n'
-              '                         adb -s PHONE_SERIAL reverse tcp:8080 tcp:8080',
+              // NOTE: escribe aquí la IP LAN de tu PC (ipconfig), no la del
+              // wearable — el emulador no es alcanzable directamente desde
+              // un teléfono físico. Detalle completo en WIFI_FALLBACK.md.
+              'Solo WiFi (sin cable):\n'
+              '  1) adb -s emulator-XXXX forward tcp:8080 tcp:8080\n'
+              '  2) netsh interface portproxy add v4tov4 listenaddress=<IP_PC> '
+              'listenport=8080 connectaddress=127.0.0.1 connectport=8080\n'
+              '  3) Escribe la IP de tu PC arriba y pulsa WiFi\n\n'
+              'Con cable USB (más simple): adb reverse tcp:8080 tcp:8080 '
+              'y usa "localhost"',
               style: TextStyle(fontSize: 9, color: Colors.white24),
               textAlign: TextAlign.center,
             ),
