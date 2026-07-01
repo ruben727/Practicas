@@ -1,0 +1,23 @@
+name: wearable_app
+description: "P2.6: Monitor actividad física - wearable BLE GATT server"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  ble_peripheral: ^1.0.0
+  web_socket_channel: ^3.0.0
+  permission_handler: ^11.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
