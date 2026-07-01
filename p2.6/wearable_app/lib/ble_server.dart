@@ -1,266 +1,214 @@
-// BleServer: first tries BLE GATT peripheral (bluetooth_low_energy ^6.2.1).
-// If advertising fails it automatically falls back to a WebSocket server on
-// port 8080, bound to 0.0.0.0 (all interfaces) so it is reachable from
-// outside the AVD via `adb forward` regardless of the emulator's internal
-// NAT address (10.0.2.x).
-//
-// --- LIMITATION (emulator) ---
-// bluetooth_low_energy's own docs state BLE is not supported on emulators.
-// In practice, this Wear OS AVD's virtual Bluetooth stack (rootcanal) DOES
-// let addService()/startAdvertising() succeed with status=0 locally — but
-// that does not guarantee the advertisement reaches a physical phone's real
-// radio. Verify with the phone app; if it can't discover "WearableMonitor",
-// use the WebSocket fallback. Two scenarios:
-//
-//   A) Phone plugged into the PC via USB (adb sees it):
-//      1. adb -s emulator-XXXX forward tcp:8080 tcp:8080
-//      2. adb -s PHONE_SERIAL  reverse tcp:8080 tcp:8080
-//      3. Phone app connects to ws://localhost:8080
-//
-//   B) Phone only on WiFi, not plugged in (see WIFI_FALLBACK.md at repo root):
-//      `adb forward` only binds 127.0.0.1 on the host, never the WiFi NIC,
-//      so step 2 above isn't available. You must relay the host's loopback
-//      port onto the LAN interface yourself, e.g. on Windows:
-//      1. adb -s emulator-XXXX forward tcp:8080 tcp:8080
-//      2. netsh interface portproxy add v4tov4 listenaddress=<PC_LAN_IP> \
-//           listenport=8080 connectaddress=127.0.0.1 connectport=8080
-//      3. Phone app connects to ws://<PC_LAN_IP>:8080
-//      This mapping resets whenever the emulator/adb server restarts or the
-//      PC's WiFi network changes — rerun it.
-//
-// --- PRODUCTION (real wearable) ---
-// Remove the fallback; bluetooth_low_energy advertises correctly on real hardware.
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
-import 'package:flutter/foundation.dart';
 
 import 'ble_constants.dart';
+import 'fallback_server.dart';
 import 'sensor_simulator.dart';
 
-enum ServerMode { ble, websocket, idle }
-
+/// Servidor GATT real del wearable.
+///
+/// flutter_blue_plus (usado en telefono_app como cliente) NO implementa rol
+/// periférico/servidor en Android, solo rol central. Por eso aquí se usa
+/// `bluetooth_low_energy`, que sí expone `PeripheralManager` con soporte
+/// completo de advertising + características GATT + notificaciones en
+/// Android/iOS/macOS.
+///
+/// En paralelo siempre se levanta [FallbackServer]: el emulador de Wear OS
+/// no tiene forma de anunciarse por BLE hacia un dispositivo físico externo
+/// (su Bluetooth es virtual, vía Rootcanal, y no toca el radio real del
+/// host), así que para esta combinación concreta (wearable emulado +
+/// teléfono físico) el WebSocket es el único canal que de verdad va a
+/// entregar datos. Ver README.md.
 class BleServer {
-  final SensorSimulator simulator;
+  BleServer(this._simulator) : fallbackServer = FallbackServer(_simulator);
 
-  final PeripheralManager _peripheralManager = PeripheralManager();
-
-  ServerMode _mode = ServerMode.idle;
-  ServerMode get mode => _mode;
-
-  // Centrals currently subscribed (NOTIFY enabled), keyed by characteristic UUID.
-  final Map<UUID, Set<Central>> _subscriptions = {};
+  final SensorSimulator _simulator;
+  final PeripheralManager _manager = PeripheralManager();
+  final FallbackServer fallbackServer;
 
   late final GATTCharacteristic _stepsChar;
   late final GATTCharacteristic _heartRateChar;
   late final GATTCharacteristic _caloriesChar;
   late final GATTCharacteristic _statusChar;
 
-  StreamSubscription<GATTCharacteristicReadRequestedEventArgs>? _readSub;
-  StreamSubscription<GATTCharacteristicNotifyStateChangedEventArgs>? _notifySub;
+  final Map<UUID, Set<Central>> _subscribedCentrals = {};
 
-  // Sensor stream subscriptions
-  final List<StreamSubscription<dynamic>> _subs = [];
+  StreamSubscription? _stateChangedSub;
+  StreamSubscription? _notifySub;
+  StreamSubscription<int>? _stepsSub;
+  StreamSubscription<int>? _heartRateSub;
+  StreamSubscription<int>? _caloriesSub;
+  StreamSubscription<String>? _statusSub;
 
-  // WebSocket server state
-  HttpServer? _wsServer;
-  final Set<WebSocket> _wsClients = {};
+  bool _advertising = false;
+  String? lastError;
 
-  BleServer(this.simulator);
+  bool get isAdvertising => _advertising;
 
-  /// Tries BLE first; on any exception falls back to WebSocket automatically.
   Future<void> startAdvertising() async {
-    try {
-      await _startBle();
-      _mode = ServerMode.ble;
-    } catch (e) {
-      debugPrint('[BleServer] BLE failed ($e) → WebSocket fallback');
-      await _startWebSocket();
-      _mode = ServerMode.websocket;
-    }
-  }
+    if (_advertising) return;
 
-  /// Force WebSocket mode (useful when BLE starts but AVD is not discoverable).
-  Future<void> startWebSocket() async {
-    await stop();
-    await _startWebSocket();
-    _mode = ServerMode.websocket;
+    // El WebSocket de respaldo siempre corre: es el camino garantizado en
+    // este entorno (wearable emulado + teléfono físico).
+    await fallbackServer.start();
+
+    _stateChangedSub = _manager.stateChanged.listen((eventArgs) async {
+      if (eventArgs.state == BluetoothLowEnergyState.unauthorized &&
+          Platform.isAndroid) {
+        await _manager.authorize();
+      }
+    });
+
+    try {
+      await _setupGattService();
+      final advertisement = Advertisement(
+        name: 'Wearable P2.6',
+        serviceUUIDs: [UUID.fromString(BleConstants.serviceUuid)],
+      );
+      await _manager.startAdvertising(advertisement);
+      _advertising = true;
+    } catch (e) {
+      // No se pudo anunciar por BLE real (típico en el emulador de Wear
+      // OS). No es fatal: el FallbackServer ya está corriendo.
+      lastError = e.toString();
+      _advertising = false;
+    }
+
+    _stepsSub = _simulator.stepsStream.listen(
+      (value) => _notify(_stepsChar, _int32LE(value)),
+    );
+    _heartRateSub = _simulator.heartRateStream.listen(
+      (value) => _notify(_heartRateChar, Uint8List.fromList([value & 0xFF])),
+    );
+    _caloriesSub = _simulator.caloriesStream.listen(
+      (value) => _notify(_caloriesChar, _int16LE(value)),
+    );
+    _statusSub = _simulator.statusStream.listen(
+      (value) => _notify(_statusChar, Uint8List.fromList(utf8.encode(value))),
+    );
   }
 
   Future<void> stop() async {
-    for (final s in _subs) {
-      await s.cancel();
-    }
-    _subs.clear();
+    await _stepsSub?.cancel();
+    await _heartRateSub?.cancel();
+    await _caloriesSub?.cancel();
+    await _statusSub?.cancel();
+    await _notifySub?.cancel();
+    await _stateChangedSub?.cancel();
+    _stepsSub = null;
+    _heartRateSub = null;
+    _caloriesSub = null;
+    _statusSub = null;
+    _notifySub = null;
+    _stateChangedSub = null;
+    _subscribedCentrals.clear();
 
-    if (_mode == ServerMode.ble) {
-      await _readSub?.cancel();
-      await _notifySub?.cancel();
-      _readSub = null;
-      _notifySub = null;
-      try { await _peripheralManager.stopAdvertising(); } catch (_) {}
-      try { await _peripheralManager.removeAllServices(); } catch (_) {}
-      _subscriptions.clear();
-    }
-
-    if (_mode == ServerMode.websocket) {
-      for (final ws in List<WebSocket>.from(_wsClients)) {
-        try { await ws.close(); } catch (_) {}
-      }
-      _wsClients.clear();
-      await _wsServer?.close(force: true);
-      _wsServer = null;
-    }
-
-    _mode = ServerMode.idle;
-  }
-
-  // ─── BLE implementation ──────────────────────────────────────────────────
-
-  Future<void> _startBle() async {
-    _stepsChar = _makeChar(BleConstants.stepsUuid);
-    _heartRateChar = _makeChar(BleConstants.heartRateUuid);
-    _caloriesChar = _makeChar(BleConstants.caloriesUuid);
-    _statusChar = _makeChar(BleConstants.statusUuid);
-
-    // Read requests: reply with the current sensor snapshot.
-    _readSub = _peripheralManager.characteristicReadRequested.listen((args) {
-      final bytes = _currentBytes(args.characteristic.uuid);
-      _peripheralManager.respondReadRequestWithValue(args.request, value: bytes);
-    });
-
-    // Track which centrals have NOTIFY enabled per characteristic.
-    _notifySub = _peripheralManager.characteristicNotifyStateChanged.listen((args) {
-      final centrals = _subscriptions.putIfAbsent(args.characteristic.uuid, () => {});
-      if (args.state) {
-        centrals.add(args.central);
-      } else {
-        centrals.remove(args.central);
-      }
-    });
-
-    await _peripheralManager.addService(
-      GATTService(
-        uuid: UUID.fromString(BleConstants.serviceUuid),
-        isPrimary: true,
-        includedServices: [],
-        characteristics: [_stepsChar, _heartRateChar, _caloriesChar, _statusChar],
-      ),
-    );
-
-    await _peripheralManager.startAdvertising(
-      Advertisement(
-        name: BleConstants.deviceName,
-        serviceUUIDs: [UUID.fromString(BleConstants.serviceUuid)],
-      ),
-    );
-
-    _attachBleSubs();
-  }
-
-  GATTCharacteristic _makeChar(String uuid) => GATTCharacteristic.mutable(
-        uuid: UUID.fromString(uuid),
-        properties: [
-          GATTCharacteristicProperty.notify,
-          GATTCharacteristicProperty.read,
-        ],
-        permissions: [GATTCharacteristicPermission.read],
-        descriptors: [],
-      );
-
-  void _attachBleSubs() {
-    _subs.add(
-      simulator.stepsStream.listen(
-          (v) => _notifyChar(_stepsChar, _int32Le(v))),
-    );
-    _subs.add(
-      simulator.heartRateStream.listen(
-          (v) => _notifyChar(_heartRateChar, Uint8List.fromList([v.clamp(0, 255)]))),
-    );
-    _subs.add(
-      simulator.caloriesStream.listen(
-          (v) => _notifyChar(_caloriesChar, _int16Le(v.round()))),
-    );
-    _subs.add(
-      simulator.statusStream.listen(
-          (v) => _notifyChar(_statusChar, Uint8List.fromList(utf8.encode(v)))),
-    );
-  }
-
-  Future<void> _notifyChar(GATTCharacteristic char, Uint8List bytes) async {
-    final centrals = _subscriptions[char.uuid];
-    if (centrals == null || centrals.isEmpty) return;
-    for (final central in List<Central>.from(centrals)) {
+    if (_advertising) {
       try {
-        await _peripheralManager.notifyCharacteristic(central, char, value: bytes);
+        await _manager.stopAdvertising();
+        await _manager.removeAllServices();
       } catch (_) {
-        centrals.remove(central);
+        // El manager puede no estar en un estado válido si nunca llegó a
+        // anunciarse de verdad; no bloquea el apagado del simulador.
       }
+      _advertising = false;
     }
+
+    await fallbackServer.stop();
   }
 
-  Uint8List _currentBytes(UUID uuid) {
-    if (uuid == _stepsChar.uuid) return _int32Le(simulator.steps);
-    if (uuid == _heartRateChar.uuid) {
-      return Uint8List.fromList([simulator.heartRate.clamp(0, 255)]);
-    }
-    if (uuid == _caloriesChar.uuid) return _int16Le(simulator.calories.round());
-    if (uuid == _statusChar.uuid) {
-      return Uint8List.fromList(utf8.encode(simulator.status));
-    }
-    return Uint8List(0);
-  }
+  Future<void> _setupGattService() async {
+    await _manager.removeAllServices();
 
-  // ─── WebSocket fallback ───────────────────────────────────────────────────
+    _stepsChar = GATTCharacteristic.mutable(
+      uuid: UUID.fromString(BleConstants.stepsCharUuid),
+      properties: [GATTCharacteristicProperty.notify],
+      permissions: [],
+      descriptors: [],
+    );
+    _heartRateChar = GATTCharacteristic.mutable(
+      uuid: UUID.fromString(BleConstants.heartRateCharUuid),
+      properties: [GATTCharacteristicProperty.notify],
+      permissions: [],
+      descriptors: [],
+    );
+    _caloriesChar = GATTCharacteristic.mutable(
+      uuid: UUID.fromString(BleConstants.caloriesCharUuid),
+      properties: [GATTCharacteristicProperty.notify],
+      permissions: [],
+      descriptors: [],
+    );
+    _statusChar = GATTCharacteristic.mutable(
+      uuid: UUID.fromString(BleConstants.statusCharUuid),
+      properties: [GATTCharacteristicProperty.notify],
+      permissions: [],
+      descriptors: [],
+    );
 
-  Future<void> _startWebSocket() async {
-    _wsServer = await HttpServer.bind(InternetAddress.anyIPv4, BleConstants.wsPort);
+    final service = GATTService(
+      uuid: UUID.fromString(BleConstants.serviceUuid),
+      isPrimary: true,
+      includedServices: [],
+      characteristics: [
+        _stepsChar,
+        _heartRateChar,
+        _caloriesChar,
+        _statusChar,
+      ],
+    );
+    await _manager.addService(service);
 
-    _wsServer!.transform(WebSocketTransformer()).listen((ws) {
-      _wsClients.add(ws);
-      // Push current snapshot on connect
-      _sendWs(ws, {'type': 'steps',  'value': simulator.steps});
-      _sendWs(ws, {'type': 'hr',     'value': simulator.heartRate});
-      _sendWs(ws, {'type': 'cal',    'value': simulator.calories.round()});
-      _sendWs(ws, {'type': 'status', 'value': simulator.status});
-      ws.done.then((_) => _wsClients.remove(ws));
+    _notifySub = _manager.characteristicNotifyStateChanged.listen((
+      eventArgs,
+    ) {
+      final subscribers = _subscribedCentrals.putIfAbsent(
+        eventArgs.characteristic.uuid,
+        () => {},
+      );
+      if (eventArgs.state) {
+        subscribers.add(eventArgs.central);
+        _notify(eventArgs.characteristic, _currentValueFor(eventArgs.characteristic));
+      } else {
+        subscribers.remove(eventArgs.central);
+      }
     });
-
-    _subs.add(simulator.stepsStream.listen(
-        (v) => _broadcast({'type': 'steps',  'value': v})));
-    _subs.add(simulator.heartRateStream.listen(
-        (v) => _broadcast({'type': 'hr',     'value': v})));
-    _subs.add(simulator.caloriesStream.listen(
-        (v) => _broadcast({'type': 'cal',    'value': v.round()})));
-    _subs.add(simulator.statusStream.listen(
-        (v) => _broadcast({'type': 'status', 'value': v})));
   }
 
-  void _broadcast(Map<String, dynamic> msg) {
-    final data = jsonEncode(msg);
-    for (final ws in List<WebSocket>.from(_wsClients)) {
-      try { ws.add(data); } catch (_) {}
+  Uint8List _currentValueFor(GATTCharacteristic characteristic) {
+    if (characteristic.uuid == _stepsChar.uuid) {
+      return _int32LE(_simulator.currentSteps);
+    }
+    if (characteristic.uuid == _heartRateChar.uuid) {
+      return Uint8List.fromList([_simulator.currentHeartRate & 0xFF]);
+    }
+    if (characteristic.uuid == _caloriesChar.uuid) {
+      return _int16LE(_simulator.currentCalories);
+    }
+    return Uint8List.fromList(utf8.encode(_simulator.currentStatus));
+  }
+
+  void _notify(GATTCharacteristic characteristic, Uint8List value) {
+    if (!_advertising) return;
+    final subscribers = _subscribedCentrals[characteristic.uuid];
+    if (subscribers == null || subscribers.isEmpty) return;
+    for (final central in Set<Central>.of(subscribers)) {
+      _manager
+          .notifyCharacteristic(central, characteristic, value: value)
+          .catchError((_) => subscribers.remove(central));
     }
   }
 
-  void _sendWs(WebSocket ws, Map<String, dynamic> msg) {
-    try { ws.add(jsonEncode(msg)); } catch (_) {}
+  Uint8List _int32LE(int value) {
+    final data = ByteData(4)..setInt32(0, value, Endian.little);
+    return data.buffer.asUint8List();
   }
 
-  // ─── Encoding helpers ─────────────────────────────────────────────────────
-
-  Uint8List _int32Le(int v) {
-    final bd = ByteData(4);
-    bd.setInt32(0, v, Endian.little);
-    return bd.buffer.asUint8List();
-  }
-
-  Uint8List _int16Le(int v) {
-    final bd = ByteData(2);
-    bd.setInt16(0, v.clamp(-32768, 32767), Endian.little);
-    return bd.buffer.asUint8List();
+  Uint8List _int16LE(int value) {
+    final data = ByteData(2)..setInt16(0, value, Endian.little);
+    return data.buffer.asUint8List();
   }
 }

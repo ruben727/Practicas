@@ -1,4 +1,4 @@
-package com.example.telefono_app
+package com.practica.p26.wearable_app
 
 import io.flutter.embedding.android.FlutterActivity
 

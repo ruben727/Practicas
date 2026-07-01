@@ -1,12 +1,23 @@
+/// UUIDs compartidos entre wearable_app y telefono_app.
+///
+/// Deben ser idénticos en ambos proyectos: si cambias uno aquí, cambia
+/// también su copia en telefono_app/lib/ble_constants.dart.
 class BleConstants {
-  static const String serviceUuid     = '12345678-1234-1234-1234-123456789abc';
-  static const String stepsUuid       = 'aaaaaaaa-0001-1234-1234-123456789abc';
-  static const String heartRateUuid   = 'aaaaaaaa-0002-1234-1234-123456789abc';
-  static const String caloriesUuid    = 'aaaaaaaa-0003-1234-1234-123456789abc';
-  static const String statusUuid      = 'aaaaaaaa-0004-1234-1234-123456789abc';
+  BleConstants._();
 
-  static const int wsPort = 8080;
+  static const String serviceUuid = '12345678-1234-1234-1234-123456789abc';
 
-  // Advertised local name so the phone can identify the wearable
-  static const String deviceName = 'WearableMonitor';
+  /// int32 little-endian.
+  static const String stepsCharUuid = 'aaaaaaaa-0001-1234-1234-123456789abc';
+
+  /// uint8, latidos por minuto.
+  static const String heartRateCharUuid =
+      'aaaaaaaa-0002-1234-1234-123456789abc';
+
+  /// int16 little-endian.
+  static const String caloriesCharUuid =
+      'aaaaaaaa-0003-1234-1234-123456789abc';
+
+  /// string utf8: 'reposo' | 'caminando' | 'corriendo'.
+  static const String statusCharUuid = 'aaaaaaaa-0004-1234-1234-123456789abc';
 }

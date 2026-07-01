@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.telefono_app"
+    namespace = "com.practica.p26.telefono_app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -16,10 +16,11 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.telefono_app"
+        applicationId = "com.practica.p26.telefono_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Android 12+ (API 31) introduce BLUETOOTH_SCAN/CONNECT como permisos runtime.
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

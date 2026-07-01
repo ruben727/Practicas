@@ -17,13 +17,10 @@ class TelefonoApp extends StatelessWidget {
       create: (_) => ActivityProvider(),
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        title: 'Monitor Actividad',
+        title: 'Monitor Actividad Física',
         theme: ThemeData(
           useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.dark,
-          ),
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         ),
         home: const MonitorScreen(),
       ),

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.wearable_app"
+    namespace = "com.practica.p26.wearable_app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -16,11 +16,11 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.wearable_app"
+        applicationId = "com.practica.p26.wearable_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // bluetooth_low_energy requires minSdk 24+ on Android.
-        minSdk = maxOf(flutter.minSdkVersion, 24)
+        // bluetooth_low_energy (rol periférico/GATT server) requiere minSdk 24+.
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

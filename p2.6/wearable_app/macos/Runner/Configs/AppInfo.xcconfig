@@ -8,7 +8,7 @@
 PRODUCT_NAME = wearable_app
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.wearableApp
+PRODUCT_BUNDLE_IDENTIFIER = com.practica.p26.wearableApp
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 com.practica.p26. All rights reserved.
